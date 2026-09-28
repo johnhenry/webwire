@@ -1,0 +1,49 @@
+{
+  "name": "@johnhenry/webwire",
+  "version": "0.0.0",
+  "description": "Convert between Node.js's raw http/https objects and the standard Web Fetch API (Request/Response) -- both directions, request and response.",
+  "type": "module",
+  "main": "index.mjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./to-web-request": "./lib/to-web-request.mjs",
+    "./to-web-response": "./lib/to-web-response.mjs",
+    "./write-web-response": "./lib/write-web-response.mjs",
+    "./to-node-request-options": "./lib/to-node-request-options.mjs",
+    "./trailers": "./lib/trailers.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "http",
+    "node",
+    "fetch",
+    "request",
+    "response",
+    "web-api",
+    "incomingmessage",
+    "serverresponse"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/webwire.git"
+  },
+  "homepage": "https://opensource.johnhenry.me/webwire/",
+  "engines": {
+    "node": ">=26.0.0"
+  }
+}
