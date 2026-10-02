@@ -88,27 +88,58 @@ in `server.on("request", (req, res) => ...)`) into a Web `Request`.
   check, in priority order, for the host used to build an absolute URL from
   `req.url` (Node hands you a relative path). A reverse proxy typically
   wants `["x-forwarded-host", "host"]` so it reflects the original
-  client-facing host, not its own.
+  client-facing host, not its own. Names are case-insensitive
+  (`["X-Forwarded-Host"]` works; they are lower-cased internally because
+  Node lower-cases incoming header names).
+
+The URL scheme is `https:` when `req.socket.encrypted` is true (a request
+received by a real `https.createServer()`), otherwise `http:`.
+`X-Forwarded-Proto` is **not** consulted: behind a TLS-terminating proxy you
+get `http:` URLs unless you rebuild the URL yourself.
 
 Throws an `Error` tagged with `.status = 400` (not a raw `URL` parse error)
 if `req.url` survives Node's HTTP parser but isn't a valid URL, so callers
 can turn it into a real 400 response instead of a 500 or a process crash.
+A comma-chained host such as `X-Forwarded-Host: a.com, b.com` is not split;
+it is not a valid host, so it throws that same tagged 400.
+
+Behaviour to know about: `req.url` is resolved against the host with
+`new URL()`, so a `//host/path` request target or an absolute-form target
+(`GET http://other.example/path HTTP/1.1`) **overrides the Host header**.
+Don't trust the resulting URL's host for access decisions without
+validating it.
 
 ### `toWebResponse(nodeRes, body?)`
 
 Converts the response object Node hands back from an **outbound client**
 request (`http.request(url, (res) => ...)`'s `res`) into a Web `Response`.
 Does not read `nodeRes` itself — pass a buffered body, a `Readable`-derived
-`ReadableStream`, or omit it for a bodyless response.
+`ReadableStream`, or omit it for a bodyless response. For status 204, 205 and 304 any body
+(even an empty `Buffer`) is ignored and passed to `Response` as `null`, since
+the constructor would otherwise throw.
 
 ### `writeWebResponse(response, res, options?)`
 
-Writes a Web `Response` out through a Node `ServerResponse`. Handles status,
+Writes a Web `Response` out through a Node `ServerResponse`. Handles status
+(and a non-empty `statusText`, written as the HTTP reason phrase),
 multi-value headers (`Set-Cookie` isn't comma-joined by the Fetch spec — sent
 as separate header lines), trailers (via `setTrailers()`/`getTrailers()`,
-since Fetch `Response` has no native trailers concept), and every body shape
-a handler might return (string, `Uint8Array`, `ReadableStream`, a Node
-`Readable`, or anything else via `String()`).
+since Fetch `Response` has no native trailers concept), and the body.
+
+A real `Response`'s `.body` is always a `ReadableStream` (or `null`), and
+that is the path it takes. The string, `Uint8Array`, Node `Readable` and
+`String()` fallback branches exist only for duck-typed response-like objects
+(for example `{ status: 200, headers: new Headers(), body: "text" }`); a real
+`Response` never reaches them.
+
+Caveats:
+
+- Trailers are dropped when the response has a `content-length` header: HTTP
+  requires chunked encoding for trailers, and Node does not send them
+  otherwise.
+- Hop-by-hop headers (`connection`, `transfer-encoding`, `keep-alive`, ...)
+  pass through untouched. Stripping them is the caller's job when building a
+  proxy; this package has no opt-in strip.
 
 `response.status === 101` (WebSocket upgrade) is a special case: a real
 `Response` can't hold status 101 at all (the Fetch spec's constructor throws
@@ -132,6 +163,11 @@ equivalent outbound call with Node's raw client API:
 { url: URL, isHTTPS: boolean, requestOptions: { hostname, port, path, method, headers } }
 ```
 
+`port` is always a number (the URL's explicit port, else 80/443). `hostname`
+has IPv6 brackets stripped (`[::1]` becomes `::1`) so `http.request()` can
+connect. Repeated `set-cookie` headers come back as an array (one element
+per header); all other headers are strings.
+
 Deliberately returns plain data, not a live request — callers stay in
 control of actually issuing it, attaching socket-event hooks, writing the
 body, etc.
@@ -145,36 +181,43 @@ streamed body — a running checksum, `Server-Timing` — can be a `Promise`);
 `writeWebResponse()` checks for them via `getTrailers()` after the body
 finishes streaming and transmits them via `res.addTrailers()`.
 
+## Runtime requirements
+
+`engines` declares Node `>=26.0.0`, which is family policy. The test suite is
+run and verified on Node 26. Don't assume older Nodes work: for example, on
+Node 24.9 the `npm test` script (`node --test test/`) fails to start, because
+that Node treats the `test/` directory as a module path.
+
 ## Family
 
-Four packages actually motivated this one, in order:
+How these packages actually relate to webwire, as of the published versions:
 
-- **[`@johnhenry/leserve`](https://github.com/johnhenry/leserve)** — had
-  `toWebRequest`/`toWebResponse` as its own `node-request.mjs`/`node-to-web.mjs`,
-  and `writeWebResponse`'s logic inlined directly in `serve.mjs`. Now
-  depends on this package and re-exports the first two from their original
-  subpaths for backward compatibility (`@johnhenry/servant` already depends
-  on `leserve/node-request` specifically).
-- **[`@johnhenry/servant`](https://github.com/johnhenry/servant)** —
-  depends on `@johnhenry/leserve` *just* for `toWebRequest` (via
-  `leserve/node-request`), not for `serve()` itself — the original evidence
-  that this conversion logic had reuse value independent of "being a
-  server."
-- **[`@johnhenry/dialback`](https://github.com/johnhenry/dialback)** — its
-  `Server` had independently reimplemented both `toWebRequest` (with one
-  real, deliberate difference: `X-Forwarded-Host` priority, now expressible
-  via `hostHeaders`) and `writeWebResponse` (whose
-  `Object.fromEntries(response.headers)` silently collapsed multi-value
-  headers like `Set-Cookie` — a real bug this package's version doesn't
-  have). This duplication, alongside servant's dependency on leserve for
-  the same logic, was the actual trigger for extracting a shared package
-  rather than leaving the logic to keep drifting.
-- **[`@johnhenry/prism`](https://github.com/johnhenry/prism)** — its
-  `timed-fetch.mjs` had a version of `toNodeRequestOptions` (headers
-  normalization only) entangled with its own per-socket timing
-  instrumentation. Disentangled: `timed-fetch.mjs` now calls
-  `toNodeRequestOptions()` for the connection details and keeps the timing
-  hooks, which are its own genuine, unrelated value.
+- **[`@johnhenry/leserve`](https://github.com/johnhenry/leserve)** — the
+  real consumer. Published `@johnhenry/leserve@0.1.0` depends on
+  `@johnhenry/webwire@^0.0.0`. It originally had `toWebRequest`/`toWebResponse`
+  as its own `node-request.mjs`/`node-to-web.mjs`, with `writeWebResponse`'s
+  logic inlined in `serve.mjs`, which is where this code was extracted from.
+- **[`@johnhenry/servant`](https://github.com/johnhenry/servant)** — reaches
+  webwire only transitively, through `leserve` (it uses `toWebRequest` via
+  `leserve/node-request`). It has no direct dependency on this package. It
+  was the original evidence that this conversion logic had reuse value
+  independent of "being a server."
+- **[`@johnhenry/dialback`](https://github.com/johnhenry/dialback)** — the
+  published `@johnhenry/dialback@0.0.3` does **not** depend on webwire (its
+  only dependency is `ws`); the dialback repo's `main` branch lists
+  `@johnhenry/webwire@^0.0.0`, but that is not yet released. Its `Server` had
+  independently reimplemented both `toWebRequest` (with one deliberate
+  difference: `X-Forwarded-Host` priority, which `hostHeaders` can now
+  express) and `writeWebResponse` (whose `Object.fromEntries(response.headers)`
+  silently collapsed multi-value headers like `Set-Cookie`, a bug this
+  package does not have). That duplication, alongside servant's reliance on
+  leserve for the same logic, was the trigger for extracting a shared
+  package.
+- **[`@johnhenry/prism`](https://github.com/johnhenry/prism)** — an
+  unpublished demo, not a published consumer. Its `timed-fetch.mjs` had a
+  version of `toNodeRequestOptions` (headers normalization only) entangled
+  with its own per-socket timing instrumentation; that is the origin of
+  `toNodeRequestOptions()`.
 
 ## License
 

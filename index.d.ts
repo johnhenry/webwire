@@ -1,7 +1,13 @@
 export interface ToWebRequestOptions {
   /** Attach the original IncomingMessage as a non-enumerable `raw` property. */
   attachRaw?: boolean;
-  /** Header names to check, in priority order, for the request's host. Defaults to ["host"]. */
+  /**
+   * Header names to check, in priority order, for the request's host.
+   * Defaults to ["host"]. Matched case-insensitively. A comma-chained value
+   * ("a.com, b.com") is not split and throws an Error with `status = 400`.
+   * The URL scheme is https: when `req.socket.encrypted` is true, else http:;
+   * X-Forwarded-Proto is not consulted.
+   */
   hostHeaders?: string[];
 }
 
