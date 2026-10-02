@@ -60,3 +60,30 @@ test("round-trips a real Node client response (http.request) into a Web Response
     server.close();
   }
 });
+
+for (const status of [204, 205, 304]) {
+  test(`status ${status} accepts an (empty) body from a real client response`, async () => {
+    const server = http.createServer((req, res) => {
+      res.writeHead(status);
+      res.end();
+    });
+    await new Promise((resolve) => server.listen(0, resolve));
+    try {
+      const nodeRes = await new Promise((resolve, reject) => {
+        const clientReq = http.request({ port: server.address().port }, resolve);
+        clientReq.on("error", reject);
+        clientReq.end();
+      });
+      const chunks = [];
+      for await (const chunk of nodeRes) chunks.push(chunk);
+      // The usual buffering pattern hands an empty Buffer here; the Response
+      // constructor rejects any non-null body for null-body statuses.
+      const response = toWebResponse(nodeRes, Buffer.concat(chunks));
+      assert.equal(response.status, status);
+      assert.equal(response.body, null);
+      assert.equal(toWebResponse(nodeRes, "").body, null);
+    } finally {
+      server.close();
+    }
+  });
+}
