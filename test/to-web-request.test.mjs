@@ -95,3 +95,35 @@ test("round-trips a real Node server request into a Web Request", async () => {
     server.close();
   }
 });
+
+test("hostHeaders names are case-insensitive (Node lower-cases incoming header names)", async () => {
+  // Real server: Node itself lower-cases "X-Forwarded-Host" to
+  // "x-forwarded-host" on req.headers.
+  let url;
+  const server = http.createServer((req, res) => {
+    url = toWebRequest(req, { hostHeaders: ["X-Forwarded-Host", "Host"] }).url;
+    res.end("ok");
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        { port: server.address().port, path: "/p", headers: { "X-Forwarded-Host": "public.example.com" } },
+        (res) => res.on("data", () => {}).on("end", resolve)
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(url, "http://public.example.com/p");
+  } finally {
+    server.close();
+  }
+});
+
+test("a comma-chained forwarded host throws the tagged 400 (documented behaviour)", () => {
+  const req = fakeReq({ headers: { "x-forwarded-host": "a.com, b.com" } });
+  assert.throws(() => toWebRequest(req, { hostHeaders: ["X-Forwarded-Host"] }), (err) => {
+    assert.equal(err.status, 400);
+    return true;
+  });
+});
