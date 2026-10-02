@@ -149,3 +149,33 @@ test("a bodyless response finishes cleanly", async () => {
     }
   );
 });
+
+test("writes a non-empty statusText as the HTTP reason phrase", async () => {
+  await withServer(
+    async (req, res) => {
+      await writeWebResponse(
+        new Response("hi", { status: 201, statusText: "Made It", headers: { "x-test": "1" } }),
+        res
+      );
+    },
+    async (port) => {
+      const { res, body } = await get(port);
+      assert.equal(res.statusCode, 201);
+      assert.equal(res.statusMessage, "Made It");
+      assert.equal(res.headers["x-test"], "1");
+      assert.equal(body, "hi");
+    }
+  );
+});
+
+test("an empty statusText leaves Node's default reason phrase", async () => {
+  await withServer(
+    async (req, res) => {
+      await writeWebResponse(new Response("nope", { status: 404 }), res);
+    },
+    async (port) => {
+      const { res } = await get(port);
+      assert.equal(res.statusMessage, "Not Found");
+    }
+  );
+});
