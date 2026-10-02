@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import https from "node:https";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { toWebRequest } from "../lib/to-web-request.mjs";
 
 // A minimal IncomingMessage-shaped fake for unit tests that don't need a
@@ -126,4 +131,56 @@ test("a comma-chained forwarded host throws the tagged 400 (documented behaviour
     assert.equal(err.status, 400);
     return true;
   });
+});
+
+// Generates a throwaway self-signed cert at test time with the system
+// `openssl` (Node has no built-in X.509 generation). Returns null if that
+// isn't possible, in which case the https test skips loudly.
+const selfSignedCert = () => {
+  const dir = mkdtempSync(join(tmpdir(), "webwire-cert-"));
+  try {
+    execFileSync(
+      "openssl",
+      ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
+       "-days", "1", "-subj", "/CN=localhost"],
+      { cwd: dir, stdio: "ignore" }
+    );
+    return { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) };
+  } catch {
+    return null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+test("builds an https: URL when the request arrived over TLS (real https.createServer)", async (t) => {
+  const creds = selfSignedCert();
+  if (!creds) {
+    console.warn("SKIPPING https test: could not generate a self-signed cert (is `openssl` on PATH?)");
+    t.skip("openssl unavailable, cannot generate a self-signed cert");
+    return;
+  }
+  let url;
+  const server = https.createServer(creds, (req, res) => {
+    url = toWebRequest(req).url;
+    res.end("ok");
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    await new Promise((resolve, reject) => {
+      const req = https.request(
+        { port: server.address().port, hostname: "localhost", path: "/secure?x=1", rejectUnauthorized: false },
+        (res) => res.on("data", () => {}).on("end", resolve)
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.match(url, /^https:\/\/localhost:\d+\/secure\?x=1$/);
+  } finally {
+    server.close();
+  }
+});
+
+test("a plain-http request still builds an http: URL", () => {
+  assert.equal(toWebRequest(fakeReq({ socket: { encrypted: undefined } })).url, "http://example.com/hello?x=1");
 });
