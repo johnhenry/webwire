@@ -39,7 +39,7 @@ export interface NodeRequestOptions {
     port: number;
     path: string;
     method: string;
-    headers: Record<string, string>;
+    headers: Record<string, string | string[]>;
   };
 }
 

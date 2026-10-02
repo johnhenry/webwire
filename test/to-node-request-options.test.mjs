@@ -90,3 +90,31 @@ test("IPv6 hostnames are unbracketed and work against a real server on ::1", asy
     server.close();
   }
 });
+
+test("duplicate set-cookie headers are emitted as an array and survive a real round trip", async () => {
+  const headers = new Headers();
+  headers.append("set-cookie", "a=1");
+  headers.append("set-cookie", "b=2");
+  headers.append("x-other", "v");
+  const { requestOptions } = toNodeRequestOptions("http://example.com/", { headers });
+  assert.deepEqual(requestOptions.headers["set-cookie"], ["a=1", "b=2"]);
+  assert.equal(requestOptions.headers["x-other"], "v");
+
+  let received;
+  const server = http.createServer((req, res) => {
+    received = req.headers["set-cookie"];
+    res.end("ok");
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    const opts = toNodeRequestOptions(`http://127.0.0.1:${server.address().port}/`, { headers }).requestOptions;
+    await new Promise((resolve, reject) => {
+      const req = http.request(opts, (res) => res.on("data", () => {}).on("end", resolve));
+      req.on("error", reject);
+      req.end();
+    });
+    assert.deepEqual(received, ["a=1", "b=2"]);
+  } finally {
+    server.close();
+  }
+});
