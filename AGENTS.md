@@ -2,7 +2,7 @@
 
 `@johnhenry/webwire` — converts between Node.js's raw `http`/`https`
 objects and the standard Web Fetch API (`Request`/`Response`). Single
-package, Node >= 26, `node --test test/` (`npm test`), ships source
+package, Node >= 26 (family policy; run tests with Node 26 -- on 24.9 `node --test test/` fails to start), `node --test test/` (`npm test`), ships source
 directly — no build step. Four small, dependency-free functions; see
 README.md's table for which is which.
 
@@ -10,7 +10,7 @@ README.md's table for which is which.
 
 ## The verification loop (before every push)
 
-1. `npm test` — no test here should SKIP. Most tests spin up a real
+1. `npm test` — no test here should SKIP. (Two tests skip *loudly*, with a warning, only if the machine lacks IPv6 on `::1` or `openssl`; a skip anywhere else is a bug. The https test generates a throwaway self-signed cert with `openssl` at test time.) Most tests spin up a real
    `http.createServer()`/`http.request()` pair rather than mocking Node's
    HTTP objects — real header/status/streaming semantics are exactly the
    thing this package exists to get right, and a mock that's wrong in the
@@ -20,6 +20,20 @@ README.md's table for which is which.
 4. Commit, push, close the issue with a comment naming the commit SHA.
 
 ## Repo-specific gotchas
+
+- **Node lower-cases incoming header names.** Anything that looks up
+  `req.headers[name]` must lower-case `name` first (`hostHeaders` does).
+  `X-Forwarded-Proto` is deliberately not consulted for the URL scheme;
+  `toWebRequest()` uses `req.socket.encrypted`.
+- **Null-body statuses (204/205/304) must get `null`, not `""` or an empty
+  Buffer,** or the `Response` constructor throws.
+- **`toNodeRequestOptions()` returns `port` as a number, strips IPv6
+  brackets from `hostname`, and emits `set-cookie` as an array.** Keep
+  `index.d.ts` in step with the runtime; the 0.0.0 types lied about `port`.
+- **Don't claim webwire consumers beyond what's published.** leserve
+  (`0.1.0`, `^0.0.0`) depends on it; servant only transitively; published
+  dialback does not; prism is an unpublished demo. Re-check with `npm view`
+  before editing the README Family section.
 
 - **A real `Response` cannot hold status 101.** The Fetch spec's
   constructor throws for any status outside `[200, 599]` — `new
@@ -64,6 +78,6 @@ README.md's table for which is which.
 
 ## Releases
 
-Bump `version` in `package.json` in a PR, add a `CHANGELOG.md` entry,
+Bump `version` in `package.json` in a PR, add a dated `CHANGELOG.md` entry (`## <version> (<YYYY-MM-DD>)`, each fix citing its commit sha, no Unreleased section),
 merge, then `gh release create v<version>` (fires
 `.github/workflows/publish.yml`, gated on `npm test`).
