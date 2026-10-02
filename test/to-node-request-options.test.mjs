@@ -39,11 +39,19 @@ test("defaults to GET with no headers when given a bare URL and no options", () 
 
 test("respects an explicit port in the URL", () => {
   const { requestOptions } = toNodeRequestOptions("http://example.com:9000/");
-  assert.equal(requestOptions.port, "9000");
+  assert.equal(requestOptions.port, 9000);
 });
 
 test("normalizes a Headers instance the same way as a plain object", () => {
   const headers = new Headers({ "x-a": "1", "x-b": "2" });
   const { requestOptions } = toNodeRequestOptions("http://example.com/", { headers });
   assert.deepEqual(requestOptions.headers, { "x-a": "1", "x-b": "2" });
+});
+
+test("port is always a number, including when the URL has an explicit port", () => {
+  const explicit = toNodeRequestOptions("http://example.com:9000/").requestOptions.port;
+  assert.equal(typeof explicit, "number");
+  assert.equal(explicit, 9000);
+  assert.equal(toNodeRequestOptions("http://example.com/").requestOptions.port, 80);
+  assert.equal(toNodeRequestOptions("https://example.com/").requestOptions.port, 443);
 });
