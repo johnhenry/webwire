@@ -32,7 +32,7 @@ README.md's table for which is which.
   `index.d.ts` in step with the runtime; the 0.0.0 types lied about `port`.
 - **Don't claim webwire consumers beyond what's published.** leserve
   (`0.1.0`, `^0.0.0`) depends on it; servant only transitively; published
-  dialback does not; prism is an unpublished demo. Re-check with `npm view`
+  dialback does not; a private app's use doesn't count. Re-check with `npm view`
   before editing the README Family section.
 
 - **A real `Response` cannot hold status 101.** The Fetch spec's
@@ -52,7 +52,7 @@ README.md's table for which is which.
   the body inside the request handler, store the result, assert on it
   after.
 - **`toNodeRequestOptions()` returns plain data, not a live request.**
-  Deliberate — callers (like `@johnhenry/prism`'s `timed-fetch.mjs`) need
+  Deliberate — callers (like a private app's socket-timing `fetch` wrapper) need
   to attach their own socket-event hooks, pick `http` vs `https`, and write
   the body themselves. Don't fold request-issuing into this function; that
   would make it unusable for exactly the caller that motivated it.

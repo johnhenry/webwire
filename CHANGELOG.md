@@ -58,7 +58,7 @@ Fixed in 6ad5bea. Documented, with no behaviour change:
 The README `Family` section is reworded to match reality: `leserve`
 (published `0.1.0` depends on `^0.0.0`) is the consumer, `servant` reaches
 this package only through it, published `dialback@0.0.3` does not depend on
-it, and `prism` is an unpublished demo.
+it, and the remaining user is a private app.
 
 `engines` stays at Node `>=26.0.0` (family policy). The suite is verified on
 Node 26; on Node 24.9 `npm test` (`node --test test/`) does not start. The
@@ -74,8 +74,8 @@ loudly (a warning plus a skip reason) if `::1` or `openssl` is unavailable.
 
 Initial release. Extracted from `@johnhenry/leserve` (`toWebRequest`,
 `toWebResponse`, and `writeWebResponse`'s logic, previously inlined in
-`serve.mjs`) and `@johnhenry/prism` (`toNodeRequestOptions`, disentangled
-from `timed-fetch.mjs`'s own socket-timing instrumentation), once a real
+`serve.mjs`) and a private app (`toNodeRequestOptions`, disentangled
+from its `timed-fetch.mjs`'s own socket-timing instrumentation), once a real
 independent duplicate of the first and third turned up in
 `@johnhenry/dialback` — one with a genuine correctness gap (silently
 dropped multi-value response headers). See README.md's Family section for
