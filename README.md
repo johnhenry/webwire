@@ -26,7 +26,7 @@ package is all four, and nothing else:
 
 > **Provenance:** extracted from [`@johnhenry/leserve`](https://github.com/johnhenry/leserve)
 > (which had the first two functions as `node-request.mjs`/`node-to-web.mjs`,
-> and the third inlined in `serve.mjs`) and [`@johnhenry/prism`](https://github.com/johnhenry/prism)
+> and the third inlined in `serve.mjs`) and a private HTTP-inspector app
 > (whose `timed-fetch.mjs` had a version of the fourth entangled with its own
 > socket-timing instrumentation), once a real, independent duplicate of the
 > first and third turned up in [`@johnhenry/dialback`](https://github.com/johnhenry/dialback) —
@@ -213,11 +213,6 @@ How these packages actually relate to webwire, as of the published versions:
   package does not have). That duplication, alongside servant's reliance on
   leserve for the same logic, was the trigger for extracting a shared
   package.
-- **[`@johnhenry/prism`](https://github.com/johnhenry/prism)** — an
-  unpublished demo, not a published consumer. Its `timed-fetch.mjs` had a
-  version of `toNodeRequestOptions` (headers normalization only) entangled
-  with its own per-socket timing instrumentation; that is the origin of
-  `toNodeRequestOptions()`.
 
 ## License
 
