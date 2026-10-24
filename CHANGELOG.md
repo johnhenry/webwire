@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.0 (2026-10-24)
+
+Fixes and additions from testing `0.0.1` as the Node adapter for p2pws
+(johnhenry/p2pws#294). One new function (`toNodeListener()`), new options
+(`toWebRequest()`'s `res`; `writeWebResponse()`'s `method` and
+`bufferLimit`), and no removals. Some behaviour changes that callers can
+see are listed below.
+
+### Added
+
+- **`toNodeListener(handler, options?)`.** Wraps a fetch-style
+  `(request, info) => Response` handler as a Node `request` listener for
+  `http`, `https` and `http2` (compatibility API). It sends a 400 when
+  `toWebRequest()` rejects the URL, and a 500 when the handler throws or
+  returns something that isn't a response. It wires up the client-abort
+  signal and writes the response with `writeWebResponse()`. The second
+  argument is `{ remoteAddress, remotePort, localAddress, localPort,
+  encrypted }`, like Deno's `serve()` `info`, so handlers don't need
+  `attachRaw`. Errors go to `onError`, which defaults to `console.error`.
+  This is the one function that composes the others; the other four stay
+  independent. Added in 4d99f19.
+- **`writeWebResponse()` `bufferLimit` option (bytes, default `0`).** A
+  streamed body that ends within the limit is sent with `content-length`
+  instead of chunked encoding, as `res.end(string)` does. Skipped when the
+  response already has a `content-length` or carries trailers. Added in
+  a74ccbe.
+
+### Fixed
+
+- **`toWebRequest()`: `request.signal` never aborted.** It now aborts with
+  an `AbortError` when the request is aborted before its body is complete.
+  With the new `{ res }` option it also aborts when the response closes
+  before finishing, which is the client disconnecting. For a GET, the
+  request's own `close` fires at once, so pass `res` to cancel slow work.
+  `toNodeListener()` passes it for you. Fixed in 4f9b7ea.
+- **`writeWebResponse()` reported client disconnects as errors.**
+  `ERR_STREAM_PREMATURE_CLOSE` / `ERR_STREAM_UNABLE_TO_PIPE` no longer
+  reach `onError`. The body is cancelled instead, including a read still
+  waiting on a slow body. Real body errors are still reported. Fixed in
+  a74ccbe.
+- **`writeWebResponse()` pulled the whole body for HEAD.** For HEAD
+  (`options.method`, else `res.req.method`) and for 204/205/304, the body
+  is now cancelled without being read. Fixed in a74ccbe.
+- **`writeWebResponse()` dropped the connection when the body failed
+  before any byte was written.** It now sends a plain
+  `500 Internal Server Error` and reports the error, as it does for a body
+  that was already read. A non-empty `statusText` is now assigned to
+  `res.statusMessage` rather than written with `writeHead()`, so the
+  headers stay unsent until the first byte. Fixed in a74ccbe.
+- **`toWebRequest()` threw on `node:http2` compatibility requests**
+  (`Symbol(sensitiveHeaders) … cannot be converted to a ByteString`).
+  Symbol keys and `:` pseudo-headers are now dropped. The host falls back
+  to `:authority` and the scheme comes from `:scheme`.
+  `writeWebResponse()` works with `Http2ServerResponse`, which has no
+  reason phrase. Fixed in 4f9b7ea and a74ccbe, with end-to-end
+  `http2.createServer()` tests in 4d99f19.
+- **`toWebRequest()` collapsed duplicate inbound headers.** Headers are now
+  built from `req.rawHeaders`, so a repeated `Set-Cookie` comes back
+  separately from `request.headers.getSetCookie()` instead of as
+  `"q=1,r=2"`. Other repeated headers are joined with `", "` by `Headers`.
+  A duplicate that Node used to drop, such as a second `Content-Type`, now
+  shows up joined. Fixed in 4f9b7ea.
+
+### Behaviour changes to know about
+
+- Duck-typed string or `Uint8Array` bodies are now sent with
+  `res.end(data)`, so Node adds a `content-length` header.
+- `onError` is now also called for a body failure before the headers are
+  sent, which is the new 500 case.
+
+### Tests
+
+36 -> 63. One test skips loudly, and only when IPv6 on `::1` or `openssl`
+is unavailable. Every new behaviour is tested against a real
+`http.createServer()`/`http.request()` pair, or a real
+`http2.createServer()`/`http2.connect()` pair. The tests for each fixed bug were checked to fail against the
+`0.0.1` `lib/`.
+
 ## 0.0.1 (2026-10-01)
 
 Bug-fix release from a docs audit. All of the bugs below shipped in `0.0.0` on

@@ -15,7 +15,8 @@ it. Any code that wants to work in `Request`/`Response` terms — a router, a
 proxy, a test harness — but still has to touch Node's raw sockets somewhere
 (running a real server, or making a real outbound client request) needs to
 convert at that boundary. There are exactly four such boundaries; this
-package is all four, and nothing else:
+package is all four, plus one convenience that composes the server-side
+pair:
 
 | Direction | Function |
 |---|---|
@@ -23,6 +24,7 @@ package is all four, and nothing else:
 | Node outbound client response → Web `Response` | [`toWebResponse()`](#towebresponsenoderes-body) |
 | Web `Response` → written-out Node `ServerResponse` | [`writeWebResponse()`](#writewebresponseresponse-res-options) |
 | Web `Request`-shaped input → Node client `http.request()` options | [`toNodeRequestOptions()`](#tonoderequestoptionsrequestorurl-options) |
+| Fetch-style handler `(request, info) => Response` → Node `request` listener | [`toNodeListener()`](#tonodelistenerhandler-options) |
 
 > **Provenance:** extracted from [`@johnhenry/leserve`](https://github.com/johnhenry/leserve)
 > (which had the first two functions as `node-request.mjs`/`node-to-web.mjs`,
@@ -50,6 +52,24 @@ const server = http.createServer(async (req, res) => {
   await writeWebResponse(response, res);
 });
 server.listen(8000);
+```
+
+Or let `toNodeListener()` do that wiring (400/500 handling, client-abort
+signal, HEAD) for you:
+
+```js
+import { toNodeListener } from "@johnhenry/webwire";
+import http from "node:http";
+
+http
+  .createServer(
+    toNodeListener(async (request, info) => {
+      // Cancelled if the client disconnects.
+      const upstream = await fetch("https://api.example.com/slow", { signal: request.signal });
+      return Response.json({ upstream: await upstream.json(), from: info.remoteAddress });
+    })
+  )
+  .listen(8000);
 ```
 
 ```js
@@ -91,10 +111,30 @@ in `server.on("request", (req, res) => ...)`) into a Web `Request`.
   client-facing host, not its own. Names are case-insensitive
   (`["X-Forwarded-Host"]` works; they are lower-cased internally because
   Node lower-cases incoming header names).
+- `options.res` (`ServerResponse`) — the matching response. When given,
+  `request.signal` also aborts if the response closes before it finishes
+  (the client disconnected). Without it, the signal only aborts while the
+  request body is still arriving; for a GET that window is already over, so
+  pass `res` if you want to cancel slow work when the client goes away.
+
+`request.signal` aborts with an `AbortError` `DOMException` when the client
+disconnects (see `options.res`), so handlers can pass it on to `fetch()`,
+timers, database calls and so on.
+
+Headers are built from `req.rawHeaders`, so repeated inbound headers such as
+`Set-Cookie` stay separate (`request.headers.getSetCookie()` returns each)
+instead of Node's comma-joined `req.headers` value. Other repeated headers
+are joined with `", "` by `Headers`, so a duplicate that Node would drop (a
+second `Content-Type`, say) shows up joined.
+
+`node:http2` compatibility-API requests (`Http2ServerRequest`) work too:
+pseudo-headers (`:method`, `:path`, ...) and symbol keys are dropped from
+the headers, the host falls back to `:authority` when no `hostHeaders`
+header is present, and the scheme comes from `:scheme`.
 
 The URL scheme is `https:` when `req.socket.encrypted` is true (a request
-received by a real `https.createServer()`), otherwise `http:`.
-`X-Forwarded-Proto` is **not** consulted: behind a TLS-terminating proxy you
+received by a real `https.createServer()`), otherwise `http:`
+(HTTP/2: `:scheme`). `X-Forwarded-Proto` is **not** consulted: behind a TLS-terminating proxy you
 get `http:` URLs unless you rebuild the URL yourself.
 
 Throws an `Error` tagged with `.status = 400` (not a raw `URL` parse error)
@@ -132,6 +172,24 @@ that is the path it takes. The string, `Uint8Array`, Node `Readable` and
 (for example `{ status: 200, headers: new Headers(), body: "text" }`); a real
 `Response` never reaches them.
 
+Body handling:
+
+- For a HEAD request and for status 204/205/304 the body is cancelled, not
+  read. The method comes from `options.method`, else `res.req.method`.
+- A client disconnecting mid-body cancels the body and is **not** reported
+  to `onError`; only failures of the body itself are.
+- A body that fails before its first byte is written (headers not yet sent)
+  gets a plain `500 Internal Server Error` instead of a dropped connection.
+  After the first byte, the connection is destroyed.
+- `options.bufferLimit` (bytes, default `0`) buffers that much of a streamed
+  body; if it ends within the limit it is sent with `content-length`
+  instead of chunked, like `res.end(string)`. Skipped when the response
+  already has a `content-length` or carries trailers. Leave it at `0` for
+  streams that must flush immediately (server-sent events).
+
+Works with `node:http2` compatibility-API responses too; HTTP/2 has no
+reason phrase, so `statusText` is not written there.
+
 Caveats:
 
 - Trailers are dropped when the response has a `content-length` header: HTTP
@@ -148,10 +206,12 @@ for any status outside `[200, 599]`), so pass a plain
 immediately without touching `res`, leaving the upgrade to whatever handled
 it already.
 
-- `options.onError` (`(error: Error) => void`) — called (not thrown) if
-  writing a streamed body fails after headers are already sent, since
-  there's no response left at that point to send an error status on.
-  Defaults to `console.error`.
+- `options.onError` (`(error: Error) => void`) — called (not thrown) when
+  the response body fails (before or after headers are sent). Client
+  disconnects are not reported. Defaults to `console.error`.
+- `options.method` (`string`) — the request method; `HEAD` skips the body.
+  Defaults to `res.req?.method`.
+- `options.bufferLimit` (`number`, default `0`) — see above.
 
 ### `toNodeRequestOptions(requestOrUrl, options?)`
 
@@ -171,6 +231,30 @@ per header); all other headers are strings.
 Deliberately returns plain data, not a live request — callers stay in
 control of actually issuing it, attaching socket-event hooks, writing the
 body, etc.
+
+### `toNodeListener(handler, options?)`
+
+Wraps a fetch-style handler as a Node `request` listener for
+`http.createServer()`, `https.createServer()`, or `http2.createServer()` /
+`createSecureServer()` (compatibility API). It composes `toWebRequest()`
+and `writeWebResponse()`, and returns a listener; it does not start a
+server.
+
+- A request URL that `toWebRequest()` rejects gets `400 Bad Request`.
+- `request.signal` aborts when the client disconnects (`res` is wired in).
+- A handler that throws, rejects, or returns something that isn't a
+  response gets `500 Internal Server Error`. An `AbortError` thrown after
+  the client disconnected is not reported; the connection is just closed.
+- The response is written by `writeWebResponse()`, so HEAD skips the body
+  and client aborts aren't reported.
+
+The handler's second argument is connection info, in the spirit of Deno's
+`serve()` `info`, so handlers don't need `attachRaw`:
+`{ remoteAddress, remotePort, localAddress, localPort, encrypted }`.
+
+Options: `onError` (called for the 400 case, handler errors and body errors;
+defaults to `console.error`), and `hostHeaders`, `attachRaw` (passed to
+`toWebRequest()`) and `bufferLimit` (passed to `writeWebResponse()`).
 
 ### `setTrailers(response, trailers)` / `getTrailers(response)`
 
