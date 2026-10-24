@@ -184,3 +184,129 @@ test("builds an https: URL when the request arrived over TLS (real https.createS
 test("a plain-http request still builds an http: URL", () => {
   assert.equal(toWebRequest(fakeReq({ socket: { encrypted: undefined } })).url, "http://example.com/hello?x=1");
 });
+
+// --- request.signal (abort on client disconnect) ---------------------------
+
+const listen = async (handler) => {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, resolve));
+  return server;
+};
+
+test("request.signal aborts when the client disconnects mid-handler (real server, GET, { res })", async () => {
+  let resolveOutcome;
+  const outcome = new Promise((resolve) => (resolveOutcome = resolve));
+  const server = await listen(async (req, res) => {
+    const request = toWebRequest(req, { res });
+    assert.equal(request.signal.aborted, false);
+    const started = Date.now();
+    // "Slow work": 800 ms unless cancelled.
+    const result = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("timeout"), 800);
+      request.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve("aborted");
+      });
+    });
+    resolveOutcome({ result, elapsed: Date.now() - started, reason: request.signal.reason });
+    res.destroy();
+  });
+  try {
+    const client = http.request({ port: server.address().port, path: "/slow", agent: false });
+    client.on("error", () => {});
+    client.end();
+    setTimeout(() => client.destroy(), 100);
+    const { result, elapsed, reason } = await outcome;
+    assert.equal(result, "aborted");
+    assert.ok(elapsed < 600, `aborted after ${elapsed} ms`);
+    assert.equal(reason.name, "AbortError");
+  } finally {
+    server.close();
+  }
+});
+
+test("request.signal aborts when the client disconnects mid-upload, even without { res }", async () => {
+  let resolveAborted;
+  const aborted = new Promise((resolve) => (resolveAborted = resolve));
+  const server = await listen((req, res) => {
+    const request = toWebRequest(req);
+    request.signal.addEventListener("abort", () => resolveAborted(true));
+    request.text().catch(() => {});
+  });
+  try {
+    const client = http.request({
+      port: server.address().port, method: "POST", agent: false, headers: { "content-length": "1000" },
+    });
+    client.on("error", () => {});
+    client.write("partial");
+    setTimeout(() => client.destroy(), 50);
+    assert.equal(await aborted, true);
+  } finally {
+    server.close();
+  }
+});
+
+test("request.signal does not abort for a request that completes normally (keep-alive)", async () => {
+  const signals = [];
+  const server = await listen(async (req, res) => {
+    const request = toWebRequest(req, { res });
+    signals.push(request.signal);
+    if (request.method === "POST") await request.text();
+    res.end("ok");
+  });
+  const agent = new http.Agent({ keepAlive: true });
+  try {
+    for (const method of ["GET", "POST", "GET"]) {
+      await new Promise((resolve, reject) => {
+        const req = http.request({ port: server.address().port, method, agent }, (res) =>
+          res.resume().on("end", resolve)
+        );
+        req.on("error", reject);
+        req.end(method === "POST" ? "body" : undefined);
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(signals.length, 3);
+    assert.deepEqual(signals.map((s) => s.aborted), [false, false, false]);
+  } finally {
+    agent.destroy();
+    server.close();
+  }
+});
+
+// --- headers from rawHeaders -----------------------------------------------
+
+test("duplicate inbound Set-Cookie headers stay separate (built from rawHeaders, real server)", async () => {
+  let cookies, joined;
+  const server = await listen((req, res) => {
+    const request = toWebRequest(req);
+    cookies = request.headers.getSetCookie();
+    joined = request.headers.get("x-multi");
+    res.end("ok");
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          port: server.address().port,
+          headers: { "set-cookie": ["q=1", "r=2"], "x-multi": ["a", "b"] },
+        },
+        (res) => res.resume().on("end", resolve)
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.deepEqual(cookies, ["q=1", "r=2"]);
+    assert.equal(joined, "a, b");
+  } finally {
+    server.close();
+  }
+});
+
+test("falls back to req.headers (arrays expanded, symbol and pseudo keys dropped) without rawHeaders", () => {
+  const headers = { host: "example.com", "set-cookie": ["a=1", "b=2"], ":path": "/x" };
+  headers[Symbol("sensitiveHeaders")] = [];
+  const request = toWebRequest(fakeReq({ headers }));
+  assert.deepEqual(request.headers.getSetCookie(), ["a=1", "b=2"]);
+  assert.deepEqual([...request.headers.keys()].sort(), ["host", "set-cookie", "set-cookie"]);
+});

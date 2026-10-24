@@ -9,10 +9,17 @@ export interface ToWebRequestOptions {
    * X-Forwarded-Proto is not consulted.
    */
   hostHeaders?: string[];
+  /**
+   * The matching ServerResponse. When given, `request.signal` also aborts
+   * if the response closes before finishing (the client disconnected).
+   * Without it the signal only aborts while the request body is still
+   * arriving.
+   */
+  res?: import("http").ServerResponse | import("http2").Http2ServerResponse;
 }
 
 export declare function toWebRequest(
-  req: import("http").IncomingMessage,
+  req: import("http").IncomingMessage | import("http2").Http2ServerRequest,
   options?: ToWebRequestOptions
 ): Request;
 
@@ -22,15 +29,49 @@ export declare function toWebResponse(
 ): Response;
 
 export interface WriteWebResponseOptions {
-  /** Called (not thrown) if writing a streamed body fails after headers are already sent. */
+  /**
+   * Called (not thrown) when the response body fails. Client disconnects
+   * are not reported. Defaults to console.error.
+   */
   onError?: (error: Error) => void;
+  /** Request method; HEAD skips (cancels) the body. Defaults to `res.req?.method`. */
+  method?: string;
+  /**
+   * Buffer up to this many bytes of a streamed body; if it ends within the
+   * limit, send it with `content-length` instead of chunked. Default 0 (off).
+   */
+  bufferLimit?: number;
 }
 
 export declare function writeWebResponse(
   response: Response | { status: 101 },
-  res: import("http").ServerResponse,
+  res: import("http").ServerResponse | import("http2").Http2ServerResponse,
   options?: WriteWebResponseOptions
 ): Promise<void>;
+
+export interface NodeListenerInfo {
+  remoteAddress: string | undefined;
+  remotePort: number | undefined;
+  localAddress: string | undefined;
+  localPort: number | undefined;
+  encrypted: boolean;
+}
+
+export interface ToNodeListenerOptions {
+  /** Called for a bad request URL (400), a handler error (500) or a body error. Defaults to console.error. */
+  onError?: (error: Error) => void;
+  hostHeaders?: string[];
+  attachRaw?: boolean;
+  bufferLimit?: number;
+}
+
+export declare function toNodeListener(
+  handler: (request: Request, info: NodeListenerInfo) => Response | { status: 101 } | Promise<Response | { status: 101 }>,
+  options?: ToNodeListenerOptions
+): (
+  req: import("http").IncomingMessage | import("http2").Http2ServerRequest,
+  res: import("http").ServerResponse | import("http2").Http2ServerResponse
+) => Promise<void>;
 
 export interface ToNodeRequestOptionsInit {
   method?: string;
