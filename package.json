@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/webwire",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Convert between Node.js's raw http/https objects and the standard Web Fetch API (Request/Response) -- both directions, request and response.",
   "type": "module",
   "main": "index.mjs",
@@ -14,6 +14,7 @@
     "./to-web-response": "./lib/to-web-response.mjs",
     "./write-web-response": "./lib/write-web-response.mjs",
     "./to-node-request-options": "./lib/to-node-request-options.mjs",
+    "./to-node-listener": "./lib/to-node-listener.mjs",
     "./trailers": "./lib/trailers.mjs"
   },
   "files": [
